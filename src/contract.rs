@@ -196,5 +196,15 @@ mod tests {
         .unwrap();
         let value: CountResponse = from_binary(&res).unwrap();
         assert_eq!(88, value.count);
+
+        let res = query(
+            &deps,
+            QueryMsg::GetMyNum {
+                address: HumanAddr::from("jozo"),
+            },
+        )
+        .unwrap();
+        let value: CountResponse = from_binary(&res).unwrap();
+        assert_eq!(0, value.count);
     }
 }
