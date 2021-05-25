@@ -1,10 +1,10 @@
 use cosmwasm_std::{
-    to_binary, Api, Binary, Env, Extern, HandleResponse, InitResponse, Querier, StdError,
-    StdResult, Storage,
+    to_binary, Api, Binary, Env, Extern, HandleResponse, HumanAddr, InitResponse, Querier,
+    StdError, StdResult, Storage, Uint128,
 };
 
 use crate::msg::{CountResponse, HandleMsg, InitMsg, QueryMsg};
-use crate::state::{config, config_read, State};
+use crate::state::{balances, balances_read, config, config_read, State};
 
 pub fn init<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
@@ -29,7 +29,22 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
     match msg {
         HandleMsg::Increment {} => try_increment(deps, env),
         HandleMsg::Reset { count } => try_reset(deps, env, count),
+        HandleMsg::SaveMyNum { num } => try_my_number(deps, env, Uint128::from(num)),
     }
+}
+
+pub fn try_my_number<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+    amount: Uint128,
+) -> StdResult<HandleResponse> {
+    let sender_raw = deps.api.canonical_address(&env.message.sender)?;
+    let mut accounts = balances(&mut deps.storage);
+    accounts.update(sender_raw.as_slice(), |balance: Option<Uint128>| {
+        Ok(balance.unwrap_or_default() + amount)
+    })?;
+
+    Ok(HandleResponse::default())
 }
 
 pub fn try_increment<S: Storage, A: Api, Q: Querier>(
@@ -66,12 +81,26 @@ pub fn query<S: Storage, A: Api, Q: Querier>(
 ) -> StdResult<Binary> {
     match msg {
         QueryMsg::GetCount {} => to_binary(&query_count(deps)?),
+        QueryMsg::GetMyNum { address } => to_binary(&query_balance(deps, address)?),
     }
 }
 
 fn query_count<S: Storage, A: Api, Q: Querier>(deps: &Extern<S, A, Q>) -> StdResult<CountResponse> {
     let state = config_read(&deps.storage).load()?;
     Ok(CountResponse { count: state.count })
+}
+
+pub fn query_balance<S: Storage, A: Api, Q: Querier>(
+    deps: &Extern<S, A, Q>,
+    address: HumanAddr,
+) -> StdResult<CountResponse> {
+    let addr_raw = deps.api.canonical_address(&address)?;
+    let balance = balances_read(&deps.storage)
+        .may_load(addr_raw.as_slice())?
+        .unwrap_or_default();
+    Ok(CountResponse {
+        count: balance.u128() as i32,
+    })
 }
 
 #[cfg(test)]
@@ -142,5 +171,30 @@ mod tests {
         let res = query(&deps, QueryMsg::GetCount {}).unwrap();
         let value: CountResponse = from_binary(&res).unwrap();
         assert_eq!(5, value.count);
+    }
+
+    #[test]
+    fn bucket_storage() {
+        let mut deps = mock_dependencies(20, &coins(2, "token"));
+
+        let msg = InitMsg { count: 17 };
+        let env = mock_env("creator", &coins(2, "token"));
+        let _res = init(&mut deps, env, msg).unwrap();
+
+        // beneficiary can release it
+        let env = mock_env("jojo", &coins(2, "token"));
+        let msg = HandleMsg::SaveMyNum { num: 88 };
+        let _res = handle(&mut deps, env, msg).unwrap();
+
+        // should save the num
+        let res = query(
+            &deps,
+            QueryMsg::GetMyNum {
+                address: HumanAddr::from("jojo"),
+            },
+        )
+        .unwrap();
+        let value: CountResponse = from_binary(&res).unwrap();
+        assert_eq!(88, value.count);
     }
 }
